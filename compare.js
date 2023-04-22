@@ -1,81 +1,64 @@
-const puppeteer = require('puppeteer');
 const fs = require('fs');
 const path = require('path');
-const PNG = require('pngjs').PNG;
+const { PNG } = require('pngjs');
 const pixelmatch = require('pixelmatch');
-const sharp = require('sharp');
-const designsFolder = 'designs';
-const screenshotsFolder = 'screenshots';
+const puppeteer = require('puppeteer');
 
-// Создание папки для скриншотов, если она не существует
-if (!fs.existsSync(screenshotsFolder)) {
-  fs.mkdirSync(screenshotsFolder);
-}
+// Указываем адрес тестируемой страницы
+const testPageUrl = 'http://127.0.0.1:5500/promotions-news.html';
 
-(async () => {
-  // Адрес тестируемой страницы
-  const testedPageUrl = 'http://127.0.0.1:5500/promotions-news.html';
+// Настройки для pixelmatch
+const pixelmatchOptions = {
+  threshold: 0.1, // допустимая погрешность (от 0 до 1)
+  includeAA: false,
+};
 
-  // Список файлов макетов для сравнения
-  const designFiles = fs.readdirSync(designsFolder).filter((file) => path.extname(file) === '.png');
-
+async function run() {
   const browser = await puppeteer.launch();
   const page = await browser.newPage();
 
-  // Загрузка тестируемой страницы
-  await page.goto(testedPageUrl, { waitUntil: 'networkidle0' });
+  const designsFolder = './designs';
+  const designFiles = fs.readdirSync(designsFolder).filter((file) => path.extname(file) === '.png');
 
   for (const designFile of designFiles) {
     const designPath = path.join(designsFolder, designFile);
-    const designImage = await sharp(designPath);
-    const { width, height } = await designImage.metadata();
 
-    // Установка размера окна браузера согласно размерам макета
-    await page.setViewport({ width, height });
+    const design = PNG.sync.read(fs.readFileSync(designPath));
+    const { width: designWidth, height: designHeight } = design;
 
-    // Создание скриншота страницы
-    const fullScreenshotBuffer = await page.screenshot({ fullPage: true });
-    const screenshotBuffer = await sharp(fullScreenshotBuffer)
-      .extract({ left: 0, top: 0, width: width, height: height })
-      .toBuffer();
+    await page.setViewport({ width: designWidth, height: designHeight });
+    const screenshot = await page.screenshot({ fullPage: true });
 
-    const screenshot = await sharp(screenshotBuffer);
+    const screenshotPath = `./screenshots/${designFile.replace('.png', '-screenshot.png')}`;
+    fs.writeFileSync(screenshotPath, screenshot);
 
-    // Сохранение скриншота
-    await screenshot.toFile(path.join(screenshotsFolder, `screenshot-${designFile}`));
+    const pageImage = PNG.sync.read(screenshot);
 
-    const maxHeight = Math.max(height, (await screenshot.metadata()).height);
+    const height = Math.min(designHeight, pageImage.height);
+    const width = designWidth;
 
-    const img1 = await screenshot
-      .extend({
-        top: 0,
-        bottom: maxHeight - (await screenshot.metadata()).height,
-        left: 0,
-        right: 0,
-      })
-      .raw()
-      .toBuffer();
+    const img1 = design.data;
+    const img2 = pageImage.data;
+    const diffImage = new PNG({ width, height });
 
-    const img2 = await designImage
-      .extend({
-        top: 0,
-        bottom: maxHeight - height,
-        left: 0,
-        right: 0,
-      })
-      .raw()
-      .toBuffer();
+    // создаем папку для слепка различий 
+    if (!fs.existsSync('diff')) {
+      fs.mkdirSync('diff');
+    }
 
-    const diff = new PNG({ width, height: maxHeight });
-    const numDiffPixels = pixelmatch(img1, img2, diff.data, width, maxHeight, { threshold: 0.1 });
+    const diff = pixelmatch(img1, img2, diffImage.data, width, height, pixelmatchOptions);
 
-    diff.pack().pipe(fs.createWriteStream(`diff-${designFile}`));
+    const diffPath = `./diff/${designFile.replace('.png', '-diff.png')}`;
+    diffImage.pack().pipe(fs.createWriteStream(diffPath));
 
-    const totalPixels = width * maxHeight;
-    const percentage = ((totalPixels - numDiffPixels) / totalPixels) * 100;
+    const matchPercentage = (1 - diff / (width * height)) * 100;
 
-    console.log(`Вёрстка страницы '${testedPageUrl}' соответствует макету '${designFile}' на: ${percentage.toFixed(2)}%`);
+    console.log(
+      `Вёрстка страницы '${testPageUrl}' соответствует макету '${designFile}' на: ${matchPercentage.toFixed(2)}%`
+    );
   }
 
   await browser.close();
-})();
+}
+
+run().catch((error) => console.error('Произошла ошибка:', error));
