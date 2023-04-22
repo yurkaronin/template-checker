@@ -1,34 +1,81 @@
 const puppeteer = require('puppeteer');
 const fs = require('fs');
+const path = require('path');
 const PNG = require('pngjs').PNG;
 const pixelmatch = require('pixelmatch');
+const sharp = require('sharp');
+const designsFolder = 'designs';
+const screenshotsFolder = 'screenshots';
+
+// Создание папки для скриншотов, если она не существует
+if (!fs.existsSync(screenshotsFolder)) {
+  fs.mkdirSync(screenshotsFolder);
+}
 
 (async () => {
+  // Адрес тестируемой страницы
+  const testedPageUrl = 'http://127.0.0.1:5500/promotions-news.html';
+
+  // Список файлов макетов для сравнения
+  const designFiles = fs.readdirSync(designsFolder).filter((file) => path.extname(file) === '.png');
+
   const browser = await puppeteer.launch();
   const page = await browser.newPage();
-  
-  await page.setViewport({ width: 1280, height: 800 });
-  await page.goto('http://yourwebsite.com', { waitUntil: 'networkidle0' });
-  await page.screenshot({ path: 'screenshot.png' });
 
-  await browser.close();
+  // Загрузка тестируемой страницы
+  await page.goto(testedPageUrl, { waitUntil: 'networkidle0' });
 
-  const img1 = fs.createReadStream('screenshot.png').pipe(new PNG()).on('parsed', doneReading);
-  const img2 = fs.createReadStream('design.png').pipe(new PNG()).on('parsed', doneReading);
+  for (const designFile of designFiles) {
+    const designPath = path.join(designsFolder, designFile);
+    const designImage = await sharp(designPath);
+    const { width, height } = await designImage.metadata();
 
-  let filesRead = 0;
+    // Установка размера окна браузера согласно размерам макета
+    await page.setViewport({ width, height });
 
-  function doneReading() {
-    if (++filesRead < 2) return;
+    // Создание скриншота страницы
+    const fullScreenshotBuffer = await page.screenshot({ fullPage: true });
+    const screenshotBuffer = await sharp(fullScreenshotBuffer)
+      .extract({ left: 0, top: 0, width: width, height: height })
+      .toBuffer();
 
-    const diff = new PNG({ width: img1.width, height: img1.height });
-    const numDiffPixels = pixelmatch(img1.data, img2.data, diff.data, img1.width, img1.height, { threshold: 0.1 });
+    const screenshot = await sharp(screenshotBuffer);
 
-    diff.pack().pipe(fs.createWriteStream('diff.png'));
+    // Сохранение скриншота
+    await screenshot.toFile(path.join(screenshotsFolder, `screenshot-${designFile}`));
 
-    const totalPixels = img1.width * img1.height;
+    const maxHeight = Math.max(height, (await screenshot.metadata()).height);
+
+    const img1 = await screenshot
+      .extend({
+        top: 0,
+        bottom: maxHeight - (await screenshot.metadata()).height,
+        left: 0,
+        right: 0,
+      })
+      .raw()
+      .toBuffer();
+
+    const img2 = await designImage
+      .extend({
+        top: 0,
+        bottom: maxHeight - height,
+        left: 0,
+        right: 0,
+      })
+      .raw()
+      .toBuffer();
+
+    const diff = new PNG({ width, height: maxHeight });
+    const numDiffPixels = pixelmatch(img1, img2, diff.data, width, maxHeight, { threshold: 0.1 });
+
+    diff.pack().pipe(fs.createWriteStream(`diff-${designFile}`));
+
+    const totalPixels = width * maxHeight;
     const percentage = ((totalPixels - numDiffPixels) / totalPixels) * 100;
 
-    console.log(`Percentage of similarity: ${percentage.toFixed(2)}%`);
+    console.log(`Вёрстка страницы '${testedPageUrl}' соответствует макету '${designFile}' на: ${percentage.toFixed(2)}%`);
   }
+
+  await browser.close();
 })();
