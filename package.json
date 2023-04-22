@@ -1,0 +1,19 @@
+{
+  "name": "template-checker",
+  "version": "1.0.0",
+  "description": "Скрипт сравнения вёрстки с дизайн-макетом",
+  "main": "compare.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "check": "node compare.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "pixelmatch": "^5.3.0",
+    "pngjs": "^7.0.0",
+    "puppeteer": "^19.10.1",
+    "sharp": "^0.32.0"
+  }
+}
